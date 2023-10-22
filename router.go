@@ -13,13 +13,14 @@ const (
 )
 
 type Node struct {
-	isRoot   bool
-	prefix   string
-	children []*Node
-	parent   *Node
-	nodeType nodeType
-	param    *Param
-	handlers map[string]http.Handler
+	isRoot     bool
+	prefix     string
+	children   []*Node
+	paramChild *Node
+	parent     *Node
+	nodeType   nodeType
+	param      *Param
+	handlers   map[string]http.Handler
 }
 
 type Param struct {
@@ -27,12 +28,12 @@ type Param struct {
 	value string
 }
 
-func newNode(parent *Node, prefix string, nnodeType nodeType) *Node {
+func newNode(parent *Node, prefix string, nodeType nodeType) *Node {
 	return &Node{
 		prefix:   prefix,
 		parent:   parent,
 		children: []*Node{},
-		nodeType: nnodeType,
+		nodeType: nodeType,
 		handlers: make(map[string]http.Handler),
 	}
 }
@@ -60,16 +61,16 @@ func (n *Node) longestCommonChild(prefix string) *Node {
 	return nextChild
 }
 
-func (n *Node) getParamChild() *Node {
-	for _, child := range n.children {
-		if child.nodeType == param {
-			return child
+/*
+	func (n *Node) getParamChild() *Node {
+		for i := 0; i < len(n.children); i++ {
+			if n.children[i].nodeType == param {
+				return n.children[i]
+			}
 		}
+		return nil
 	}
-
-	return nil
-}
-
+*/
 func (n *Node) RemoveChild(child *Node) {
 	for i := 0; i < len(n.children); i++ {
 		if n.children[i] == child {
@@ -79,7 +80,8 @@ func (n *Node) RemoveChild(child *Node) {
 }
 
 type Router struct {
-	tree *Node
+	tree      *Node
+	paramsKey *paramsKey
 }
 
 func NewRouter() *Router {
@@ -88,6 +90,7 @@ func NewRouter() *Router {
 			isRoot:   true,
 			handlers: nil,
 		},
+		paramsKey: &paramsKey{},
 	}
 }
 
@@ -108,7 +111,7 @@ func (r *Router) insert(method, endpoint string, handler http.Handler) {
 			for j < len(endpoint) && endpoint[j] != '/' {
 				j++
 			}
-			if child := currentNode.getParamChild(); child != nil {
+			if child := currentNode.paramChild; child != nil {
 				endpoint = endpoint[j:]
 				currentNode = child
 				continue
@@ -119,7 +122,7 @@ func (r *Router) insert(method, endpoint string, handler http.Handler) {
 			node.param = &Param{
 				key: key,
 			}
-			currentNode.children = append(currentNode.children, node)
+			currentNode.paramChild = node
 			nextNode := node
 			endpoint = endpoint[j:]
 			currentNode = nextNode
@@ -201,12 +204,11 @@ func (r *Router) staticSearch(currentNode *Node, method, endpoint string) (*Node
 			break
 		}
 	}
-
 	return currentNode, ""
 }
 
 func (r *Router) paramSearch(currentNode *Node, method, endpoint string) (*Node, string) {
-	currentNode = currentNode.getParamChild()
+	currentNode = currentNode.paramChild
 	i := 0
 	for i < len(endpoint) && endpoint[i] != '/' {
 		i++
@@ -220,12 +222,13 @@ func (r *Router) paramSearch(currentNode *Node, method, endpoint string) (*Node,
 
 func backTrack(n *Node, endpoint string) (*Node, string) {
 	for {
-		paramChild := n.getParamChild()
+		paramChild := n.paramChild
 		if paramChild != nil {
 			return n, endpoint
 		}
 
 		endpoint = n.prefix + endpoint
+
 		n = n.parent
 	}
 }
@@ -233,6 +236,7 @@ func backTrack(n *Node, endpoint string) (*Node, string) {
 func (r *Router) Search(method, endpoint string) (http.Handler, []*Param) {
 	currentNode := r.tree
 	var params []*Param
+
 	for {
 		currentNode, endpoint = r.staticSearch(currentNode, method, endpoint)
 		if endpoint == "" {
@@ -276,7 +280,9 @@ func PathParam(r *http.Request, key string) string {
 func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	handler, params := r.Search(req.Method, req.URL.Path)
 	if handler != nil {
-		req = req.WithContext(context.WithValue(req.Context(), paramsKey{}, params))
+		if len(params) != 0 {
+			req = req.WithContext(context.WithValue(req.Context(), paramsKey{}, params))
+		}
 		handler.ServeHTTP(w, req)
 		return
 	}
